@@ -34,6 +34,8 @@ namespace error_transformer
         {
             RunLoggingExceptions(() =>
             {
+                var suppressFinalMessage = false;
+
                 var duration = MeasureDuration(() =>
                 {
                     // Setup command-line argument parsing
@@ -44,6 +46,9 @@ namespace error_transformer
 
                     parser.Setup(x => x.OutputFolder)
                         .As('o', "output-folder");
+
+                    parser.Setup(x => x.OutputUnzipped)
+                        .As('u', "unzipped");
 
                     var results = parser.Parse(args);
 
@@ -56,81 +61,124 @@ namespace error_transformer
 
                     var parameters = parser.Object;
 
-                    if (!Directory.Exists(parameters.InputFolder))
+                    if (File.Exists(parameters.InputFolder))
                     {
-                        Log($"The folder '{parameters.InputFolder}' does not exist.");
-                        return;
-                    }
+                        string newFilename;
 
-                    // Get already-processed errors from output folder
-                    List<string> alreadyProcessedFiles = new List<string>();
+                        if (String.IsNullOrWhiteSpace(parameters.OutputFolder))
+                            newFilename = null;
+                        else if (Path.HasExtension(parameters.OutputFolder))
+                            newFilename = parameters.OutputFolder;
+                        else
+                            newFilename = Path.ChangeExtension(Path.Combine(parameters.OutputFolder, Path.GetFileName(parameters.InputFolder)), ".txt");
 
-                    if (Directory.Exists(parameters.OutputFolder))
-                    {
-                        alreadyProcessedFiles = Directory.GetFiles(parameters.OutputFolder, "*.zip")
-                            .Select(x => Path.GetFileName(x))
-                            .ToList();
-                    }
+                        Func<Stream> getOutputStream = () =>
+                        {
+                            if (String.IsNullOrWhiteSpace(parameters.OutputFolder))
+                                return Console.OpenStandardOutput();
 
-                    // Get list of files to process (ignoring already-processed ones)
-                    var allFilesToProcess = Directory.GetFiles(parameters.InputFolder);
+                            if (Path.HasExtension(parameters.OutputFolder))
+                                return File.Create(parameters.OutputFolder);
 
-                    var filesToProcess = allFilesToProcess
-                        .Where(x => !alreadyProcessedFiles.Contains(Path.GetFileName(x), StringComparer.OrdinalIgnoreCase))
-                        .ToList();
+                            return File.Create(newFilename);
+                        };
 
-                    var ignoredCount = allFilesToProcess.Length - filesToProcess.Count;
-                    var addendum = (ignoredCount == 0 ? "" : $" ({ignoredCount:#,##0} ignored)");
+                        Action<Exception> onException = ex =>
+                        {
+                            Log();
+                            Log($"<{ex.GetType().Name}> {ex.Message}");
+                            Log(ex.StackTrace);
+                        };
 
-                    if (filesToProcess.Count == 0)
-                    {
-                        Log($"No files to process{addendum}.");
-                        return;
+                        StreamToOutput(parameters.InputFolder, newFilename, getOutputStream, null, onException);
+
+                        // If writing to standard output, don't log final message
+                        if (newFilename == null)
+                            suppressFinalMessage = true;
                     }
                     else
-                        Log($"Found {filesToProcess.Count:#,##0} {(filesToProcess.Count == 1 ? "file" : "files")} to process{addendum}.");
-
-                    if (!Directory.Exists(parameters.OutputFolder))
-                        Directory.CreateDirectory(parameters.OutputFolder);
-
-                    // Process files
-                    var saveCursorVisible = Console.CursorVisible;
-                    Console.CursorVisible = false;
-                    var stopwatch = new Stopwatch();
-
-                    stopwatch.Start();
-
-                    try
                     {
-                        progressIndex = 1;
-                        progressLength = filesToProcess.Count;
+                        if (!Directory.Exists(parameters.InputFolder))
+                        {
+                            Log($"The folder '{parameters.InputFolder}' does not exist.");
+                            return;
+                        }
 
-                        filesToProcess
-                            .AsParallel()
-                            .ForAll(x => ProcessFile(x, parameters.OutputFolder, stopwatch));
+                        if (String.IsNullOrWhiteSpace(parameters.OutputFolder))
+                            parameters.OutputFolder = Directory.GetCurrentDirectory();
 
-                        LogProgressCompleted();
-                    }
-                    finally
-                    {
-                        Console.CursorVisible = saveCursorVisible;
+                        // Get already-processed errors from output folder
+                        List<string> alreadyProcessedFiles = new List<string>();
+
+                        if (Directory.Exists(parameters.OutputFolder))
+                        {
+                            alreadyProcessedFiles = Directory.GetFiles(parameters.OutputFolder, (parameters.OutputUnzipped ? "*.log" : "*.zip"))
+                                .Select(x => Path.ChangeExtension(Path.GetFileName(x), ".zip"))
+                                .ToList();
+                        }
+
+                        // Get list of files to process (ignoring already-processed ones)
+                        var allFilesToProcess = Directory.GetFiles(parameters.InputFolder);
+
+                        var filesToProcess = allFilesToProcess
+                            .Where(x => !alreadyProcessedFiles.Contains(Path.GetFileName(x), StringComparer.OrdinalIgnoreCase))
+                            .ToList();
+
+                        var ignoredCount = allFilesToProcess.Length - filesToProcess.Count;
+                        var addendum = (ignoredCount == 0 ? "" : $" ({ignoredCount:#,##0} ignored)");
+
+                        if (filesToProcess.Count == 0)
+                        {
+                            Log($"No files to process{addendum}.");
+                            return;
+                        }
+                        else
+                            Log($"Found {filesToProcess.Count:#,##0} {(filesToProcess.Count == 1 ? "file" : "files")} to process{addendum}.");
+
+                        if (!Directory.Exists(parameters.OutputFolder))
+                            Directory.CreateDirectory(parameters.OutputFolder);
+
+                        // Process files
+                        var saveCursorVisible = Console.CursorVisible;
+                        Console.CursorVisible = false;
+                        var stopwatch = new Stopwatch();
+
+                        stopwatch.Start();
+
+                        try
+                        {
+                            progressIndex = 1;
+                            progressLength = filesToProcess.Count;
+
+                            filesToProcess
+                                .AsParallel()
+                                .ForAll(x => ProcessFile(x, parameters.OutputFolder, parameters.OutputUnzipped, stopwatch));
+
+                            LogProgressCompleted();
+                        }
+                        finally
+                        {
+                            Console.CursorVisible = saveCursorVisible;
+                        }
                     }
                 });
 
-                Log();
-                Log($"Finished in {NormalizeDuration(duration)}.");
+                if (!suppressFinalMessage)
+                {
+                    Log();
+                    Log($"Finished in {NormalizeDuration(duration)}.");
+                }
             }, false, false);
         }
 
-        private static void ProcessFile(string filename, string outputFolder, Stopwatch stopwatch)
+        private static void StreamToOutput(string filename, string outputFilename, Func<Stream> getOutputStream, Stopwatch stopwatch, Action<Exception> onException)
         {
-            string newZipFilename = null;
-
             try
             {
                 var justFilename = Path.GetFileName(filename);
 
-                LogProgress(justFilename, stopwatch);
+                if (stopwatch != null)
+                    LogProgress(justFilename, stopwatch);
 
                 using (var archive = ZipFile.OpenRead(filename))
                 {
@@ -139,25 +187,18 @@ namespace error_transformer
                         .ToList();
 
                     // Stream inner files into a new combined log file in new zip file
-                    newZipFilename = Path.Combine(outputFolder, justFilename);
-
-                    using (var newFile = ZipFile.Open(newZipFilename, ZipArchiveMode.Create))
+                    using (var outputStream = getOutputStream())
                     {
-                        var entry = newFile.CreateEntry("interceptor.log");
-
-                        using (var destinationStream = entry.Open())
-                        {
-                            interceptorFiles
-                                .ForEach(interceptorFile =>
+                        interceptorFiles
+                            .ForEach(interceptorFile =>
+                            {
+                                using (var sourceStream = interceptorFile.Open())
                                 {
-                                    using (var sourceStream = interceptorFile.Open())
-                                    {
-                                        CopyStream(sourceStream, destinationStream);
-                                    }
-                                });
+                                    CopyStream(sourceStream, outputStream);
+                                }
+                            });
 
-                            destinationStream.Flush();
-                        }
+                        outputStream.Flush();
                     }
                 }
 
@@ -165,8 +206,19 @@ namespace error_transformer
             }
             catch (Exception ex)
             {
+                onException(ex);
+            }
+        }
+
+        private static void ProcessFile(string filename, string outputFolder, bool outputUnzipped, Stopwatch stopwatch)
+        {
+            string newZipFilename = Path.Combine(outputFolder, Path.GetFileName(filename));
+            Func<Stream> getOutputStream;
+
+            Action<Exception> onException = ex =>
+            {
                 // On error, delete new zip file (if it exists) 
-                if (!String.IsNullOrWhiteSpace(newZipFilename) && File.Exists(newZipFilename))
+                if (File.Exists(newZipFilename))
                 {
                     try
                     {
@@ -179,7 +231,7 @@ namespace error_transformer
                 }
 
                 // ...and create *.error file with the error details
-                var errorFilename = Path.Combine(outputFolder, $"{Path.GetFileNameWithoutExtension(filename)}.error");
+                var errorFilename = Path.ChangeExtension(newZipFilename, ".error");
 
                 using (var writer = new StreamWriter(errorFilename, false, Encoding.UTF8))
                 {
@@ -188,6 +240,24 @@ namespace error_transformer
                 }
 
                 IncrementNumErrors();
+            };
+
+            if (outputUnzipped)
+            {
+                newZipFilename = Path.ChangeExtension(newZipFilename, ".log");
+                getOutputStream = () => File.Create(newZipFilename);
+
+                StreamToOutput(filename, newZipFilename, getOutputStream, stopwatch, onException);
+            }
+            else
+            {
+                using (var newFile = ZipFile.Open(newZipFilename, ZipArchiveMode.Create))
+                {
+                    var entry = newFile.CreateEntry("interceptor.log");
+                    getOutputStream = () => entry.Open();
+
+                    StreamToOutput(filename, newZipFilename, getOutputStream, stopwatch, onException);
+                }
             }
         }
 
@@ -347,7 +417,7 @@ namespace error_transformer
         {
             Func<string, bool> isNull = str => String.IsNullOrWhiteSpace(str);
 
-            if (isNull(args.InputFolder) || isNull(args.OutputFolder))
+            if (isNull(args.InputFolder))
                 return false;
 
             return true;

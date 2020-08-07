@@ -8,5 +8,6 @@ namespace error_transformer
     {
         public string InputFolder { get; set; }
         public string OutputFolder { get; set; }
+        public bool OutputUnzipped { get; set; }
     }
 }
