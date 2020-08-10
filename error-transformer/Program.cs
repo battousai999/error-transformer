@@ -70,7 +70,7 @@ namespace error_transformer
                         else if (Path.HasExtension(parameters.OutputFolder))
                             newFilename = parameters.OutputFolder;
                         else
-                            newFilename = Path.ChangeExtension(Path.Combine(parameters.OutputFolder, Path.GetFileName(parameters.InputFolder)), ".txt");
+                            newFilename = Path.ChangeExtension(Path.Combine(parameters.OutputFolder, Path.GetFileName(parameters.InputFolder)), ".log");
 
                         Func<Stream> getOutputStream = () =>
                         {
@@ -79,6 +79,9 @@ namespace error_transformer
 
                             if (Path.HasExtension(parameters.OutputFolder))
                                 return File.Create(parameters.OutputFolder);
+
+                            if (!Directory.Exists(Path.GetDirectoryName(newFilename)))
+                                Directory.CreateDirectory(Path.GetDirectoryName(newFilename));
 
                             return File.Create(newFilename);
                         };
@@ -337,29 +340,11 @@ namespace error_transformer
         private static string DisplayDuration(TimeSpan duration)
         {
             int seconds = (int)duration.TotalSeconds;
+            int hours = seconds / OneHour;
+            int leftoverMinutes = (seconds % OneHour) / OneMinute;
+            int leftoverSeconds = (seconds % OneHour) % OneMinute;
 
-            if (seconds < OneMinute)
-                return $"{(seconds < 1 ? 1 : seconds)} sec";
-            else if (seconds < OneHour)
-            {
-                int minutes = seconds / OneMinute;
-                int leftoverSeconds = seconds % OneMinute;
-
-                if (leftoverSeconds == 0)
-                    return $"{minutes} min";
-                else
-                    return $"{minutes} min, {leftoverSeconds} sec";
-            }
-            else
-            {
-                int hours = seconds / OneHour;
-                int leftoverMinutes = (seconds % OneHour) / OneMinute;
-
-                if (leftoverMinutes == 0)
-                    return $"{hours} {(hours == 1 ? "hour" : "hours")}";
-                else
-                    return $"{hours} {(hours == 1 ? "hour" : "hours")}, {leftoverMinutes} min";
-            }
+            return $"{hours}:{leftoverMinutes:00}:{leftoverSeconds:00}";
         }
 
         private static void LogProgress(string message, Stopwatch stopwatch)
