@@ -50,6 +50,9 @@ namespace error_transformer
                     parser.Setup(x => x.OutputUnzipped)
                         .As('u', "unzipped");
 
+                    parser.Setup(x => x.OnlyIncludeMainLogFile)
+                        .As('m', "only-main-log");
+
                     var results = parser.Parse(args);
 
                     if (results.HasErrors || !ValidateArgs(parser.Object))
@@ -93,7 +96,7 @@ namespace error_transformer
                             Log(ex.StackTrace);
                         };
 
-                        StreamToOutput(parameters.InputFolder, newFilename, getOutputStream, null, onException);
+                        StreamToOutput(parameters.InputFolder, getOutputStream, null, onException, parameters.OnlyIncludeMainLogFile);
 
                         // If writing to standard output, don't log final message
                         if (newFilename == null)
@@ -155,7 +158,7 @@ namespace error_transformer
 
                             filesToProcess
                                 .AsParallel()
-                                .ForAll(x => ProcessFile(x, parameters.OutputFolder, parameters.OutputUnzipped, stopwatch));
+                                .ForAll(x => ProcessFile(x, parameters.OutputFolder, parameters.OutputUnzipped, stopwatch, parameters.OnlyIncludeMainLogFile));
 
                             LogProgressCompleted();
                         }
@@ -174,7 +177,7 @@ namespace error_transformer
             }, false, false);
         }
 
-        private static void StreamToOutput(string filename, string outputFilename, Func<Stream> getOutputStream, Stopwatch stopwatch, Action<Exception> onException)
+        private static void StreamToOutput(string filename, Func<Stream> getOutputStream, Stopwatch stopwatch, Action<Exception> onException, bool onlyMainLog = false)
         {
             try
             {
@@ -186,7 +189,7 @@ namespace error_transformer
                 using (var archive = ZipFile.OpenRead(filename))
                 {
                     // Get list of inner files to collect
-                    var interceptorFiles = GetInterceptorFiles(archive)
+                    var interceptorFiles = GetInterceptorFiles(archive, onlyMainLog)
                         .ToList();
 
                     // Stream inner files into a new combined log file in new zip file
@@ -213,7 +216,7 @@ namespace error_transformer
             }
         }
 
-        private static void ProcessFile(string filename, string outputFolder, bool outputUnzipped, Stopwatch stopwatch)
+        private static void ProcessFile(string filename, string outputFolder, bool outputUnzipped, Stopwatch stopwatch, bool onlyMainLog = false)
         {
             string newZipFilename = Path.Combine(outputFolder, Path.GetFileName(filename));
             Func<Stream> getOutputStream;
@@ -250,7 +253,7 @@ namespace error_transformer
                 newZipFilename = Path.ChangeExtension(newZipFilename, ".log");
                 getOutputStream = () => File.Create(newZipFilename);
 
-                StreamToOutput(filename, newZipFilename, getOutputStream, stopwatch, onException);
+                StreamToOutput(filename, getOutputStream, stopwatch, onException, onlyMainLog);
             }
             else
             {
@@ -259,7 +262,7 @@ namespace error_transformer
                     var entry = newFile.CreateEntry("interceptor.log");
                     getOutputStream = () => entry.Open();
 
-                    StreamToOutput(filename, newZipFilename, getOutputStream, stopwatch, onException);
+                    StreamToOutput(filename, getOutputStream, stopwatch, onException, onlyMainLog);
                 }
             }
         }
@@ -274,7 +277,7 @@ namespace error_transformer
             }
         }
 
-        private static IEnumerable<ZipArchiveEntry> GetInterceptorFiles(ZipArchive archive)
+        private static IEnumerable<ZipArchiveEntry> GetInterceptorFiles(ZipArchive archive, bool onlyMainLog = false)
         {
             // Group interceptor-named entries by date
             var groupedEntries = archive.Entries
@@ -313,7 +316,7 @@ namespace error_transformer
                 .OrderByDescending(x => x)
                 .FirstOrDefault();
 
-            if (maxDate == null)
+            if (maxDate == null || onlyMainLog)
             {
                 // No max date indicates no other interceptor log except the main one
                 return mainInterceptorEntry
