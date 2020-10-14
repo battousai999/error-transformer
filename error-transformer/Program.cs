@@ -42,16 +42,20 @@ namespace error_transformer
                     var parser = new FluentCommandLineParser<Args>();
 
                     parser.Setup(x => x.InputFolder)
-                        .As('i', "input-folder");
+                        .As('i', "input-folder")
+                        .WithDescription("The folder from which to pull interceptor error logs");
 
                     parser.Setup(x => x.OutputFolder)
-                        .As('o', "output-folder");
+                        .As('o', "output-folder")
+                        .WithDescription("The folder to which to save transformed logs");
 
                     parser.Setup(x => x.OutputUnzipped)
-                        .As('u', "unzipped");
+                        .As('u', "unzipped")
+                        .WithDescription("Output as a log file (not zipped up)");
 
                     parser.Setup(x => x.OnlyIncludeMainLogFile)
-                        .As('m', "only-main-log");
+                        .As('m', "only-main-log")
+                        .WithDescription("Only include the latest log file (do not stitch together all log files for the day)");
 
                     var results = parser.Parse(args);
 
@@ -59,6 +63,18 @@ namespace error_transformer
                     {
                         Log("Invalid command-line parameters.");
                         Log(@"Example usage: .\error-transformer.exe -i \\wjv-gendfs01\telelogs\2020\06\26 -o c:\tm-error-logs\2020\06\26");
+                        Log();
+
+                        var longNamePadding = parser.Options.Max(x => x.LongName.Length);
+
+                        parser.Options
+                            .ToList()
+                            .ForEach(x =>
+                            {
+                                Log($"   {(x.HasShortName ? $"-{x.ShortName}, " : "    ")}--{x.LongName.PadRight(longNamePadding)} {x.Description}");
+                            });
+
+                        Log();
                         return;
                     }
 
